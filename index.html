@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa Cultural BA 2026 - Versión Corregida</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        #map { height: 100vh; width: 100%; z-index: 1; }
+        
+        .leyenda {
+            position: absolute; top: 15px; left: 50px; z-index: 1000;
+            background: white; padding: 12px; border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 210px;
+        }
+        .item-leyenda { display: flex; align-items: center; margin-bottom: 5px; font-size: 11px; font-weight: 600; }
+        .color-pin { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; border: 1px solid rgba(0,0,0,0.2); }
+
+        .modal {
+            display: none; position: fixed; z-index: 2000; left: 0; top: 0;
+            width: 100%; height: 100%; background-color: rgba(0,0,0,0.85);
+            backdrop-filter: blur(8px);
+        }
+        .modal-content {
+            background-color: white; margin: 2% auto; padding: 25px;
+            border-radius: 20px; width: 90%; max-width: 600px; max-height: 90vh;
+            overflow-y: auto; position: relative;
+        }
+        .close { position: absolute; right: 20px; top: 15px; font-size: 30px; cursor: pointer; color: #888; }
+        
+        .area-subida {
+            background: #fdfdfd; border: 2px dashed #007bff;
+            padding: 20px; border-radius: 15px; margin: 20px 0;
+        }
+        .input-social {
+            width: 100%; padding: 10px; margin: 5px 0 15px 0;
+            border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box;
+        }
+        .btn-accion {
+            background: #007bff; color: white; border: none; padding: 12px 20px;
+            border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%;
+        }
+
+        .grid-fotos {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 15px; margin-top: 20px;
+        }
+        
+        .foto-card { 
+            background: #f9f9f9; border-radius: 10px; overflow: hidden; border: 1px solid #eee; 
+            transition: box-shadow 0.3s ease, transform 0.3s ease; cursor: pointer;
+        }
+        .foto-card img { width: 100%; height: 140px; object-fit: cover; display: block; transition: transform 0.3s ease; }
+        .foto-card:hover { box-shadow: 0 8px 15px rgba(0,0,0,0.3); transform: translateY(-5px); }
+        .foto-card:hover img { transform: scale(1.1); }
+
+        .foto-info { padding: 8px; font-size: 11px; color: #555; background: white; }
+        .tag { display: inline-block; padding: 3px 10px; border-radius: 15px; font-size: 10px; text-transform: uppercase; font-weight: bold; color: white; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="leyenda">
+        <h4 style="margin:0 0 10px 0;">Categorías 2026</h4>
+        <div class="item-leyenda"><div class="color-pin" style="background:#2A7FFF"></div> Museos Públicos</div>
+        <div class="item-leyenda"><div class="color-pin" style="background:#FF9100"></div> Museos Privados</div>
+        <div class="item-leyenda"><div class="color-pin" style="background:#2ECC71"></div> Cafés Notables</div>
+        <div class="item-leyenda"><div class="color-pin" style="background:#9B59B6"></div> Librerías/Galerías</div>
+        <div class="item-leyenda"><div class="color-pin" style="background:#E74C3C"></div> Edificios/Iconos</div>
+    </div>
+
+    <div id="miModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="cerrarModal()">&times;</span>
+            <span id="modalTag" class="tag">CATEGORÍA</span>
+            <h2 id="modalTitulo" style="margin:0;">Nombre</h2>
+
+            <div class="area-subida">
+                <h4 style="margin-top:0;">📸 ¡Aporta tu foto!</h4>
+                <input type="text" id="userName" class="input-social" placeholder="Tu Nombre">
+                <input type="text" id="userInsta" class="input-social" placeholder="Tu Instagram (ej: @usuario)">
+                <input type="file" id="inputFoto" accept="image/*" style="display: none;" onchange="subirFotoReal()">
+                <button id="btnSubir" class="btn-accion" onclick="document.getElementById('inputFoto').click()">Seleccionar y Publicar Foto</button>
+            </div>
+
+            <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">Galería de la Comunidad</h3>
+            <div class="grid-fotos" id="galeriaFotos"></div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>
+
+    <script>
+        const SUPABASE_URL = 'https://pvplysgnrrsufnaoqnhx.supabase.co'; 
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2cGx5c2ducnJzdWZuYW9xbmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExODgyOTksImV4cCI6MjA4Njc2NDI5OX0.fgonR_GnbvNq8XEBGvM5w_jAnV6D_Z5B4SG2RJHHuWo';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        const map = L.map('map').setView([-34.605, -58.40], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        function crearIcono(color) {
+            return new L.Icon({
+                iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+            });
+        }
+
+        const CAT = {
+            PUB: { t: "Público", i: crearIcono('blue'), c: "#2A7FFF" },
+            PRIV: { t: "Privado", i: crearIcono('orange'), c: "#FF9100" },
+            CAFE: { t: "Café Notable", i: crearIcono('green'), c: "#2ECC71" },
+            LIB: { t: "Librería/Galería", i: crearIcono('violet'), c: "#9B59B6" },
+            HIST: { t: "Patrimonio Histórico", i: crearIcono('red'), c: "#E74C3C" }
+        };
+
+        const espacios = [
+            { n: "Museo Nal. de Bellas Artes", c: [-34.5838, -58.3930], cat: CAT.PUB },
+            { n: "Museo Moderno", c: [-34.6212, -58.3712], cat: CAT.PUB },
+            { n: "Museo Histórico Nacional", c: [-34.6277, -58.3712], cat: CAT.PUB },
+            { n: "Museo del Cabildo", c: [-34.6085, -58.3734], cat: CAT.PUB },
+            { n: "Museo Nal. de Arte Decorativo", c: [-34.5819, -58.4005], cat: CAT.PUB },
+            { n: "Museo Eduardo Sívori", c: [-34.5714, -58.4146], cat: CAT.PUB },
+            { n: "Museo Enrique Larreta", c: [-34.5623, -58.4528], cat: CAT.PUB },
+            { n: "Buenos Aires Museo (BAM)", c: [-34.6101, -58.3725], cat: CAT.PUB },
+            { n: "Museo Evita", c: [-34.5836, -58.4116], cat: CAT.PUB },
+            { n: "Museo Malvinas", c: [-34.5369, -58.4616], cat: CAT.PUB },
+            { n: "Museo Casa Carlos Gardel", c: [-34.6033, -58.4053], cat: CAT.PUB },
+            { n: "Museo José Hernández", c: [-34.5768, -58.4072], cat: CAT.PUB },
+            { n: "Museo Luis Perlotti", c: [-34.6214, -58.4411], cat: CAT.PUB },
+            { n: "Palacio Libertad (CCK)", c: [-34.6039, -58.3694], cat: CAT.PUB },
+            { n: "Centro Cultural Recoleta", c: [-34.5861, -58.3911], cat: CAT.PUB },
+            { n: "Usina del Arte", c: [-34.6294, -58.3558], cat: CAT.PUB },
+            { n: "CC General San Martín", c: [-34.6054, -58.3914], cat: CAT.PUB },
+            { n: "Teatro Colón", c: [-34.6011, -58.3816], cat: CAT.PUB },
+            { n: "Teatro San Martín", c: [-34.6042, -58.3917], cat: CAT.PUB },
+            { n: "CC Haroldo Conti", c: [-34.5422, -58.4593], cat: CAT.PUB },
+            { n: "Biblioteca Nacional", c: [-34.5843, -58.3978], cat: CAT.PUB },
+            { n: "MALBA", c: [-34.5769, -58.4030], cat: CAT.PRIV },
+            { n: "Colección Fortabat", c: [-34.6015, -58.3625], cat: CAT.PRIV },
+            { n: "Fundación Proa", c: [-34.6393, -58.3611], cat: CAT.PRIV },
+            { n: "MACBA", c: [-34.6216, -58.3715], cat: CAT.PRIV },
+            { n: "Museo del Holocausto", c: [-34.5985, -58.3984], cat: CAT.PRIV },
+            { n: "Museo Xul Solar", c: [-34.5939, -58.4039], cat: CAT.PRIV },
+            { n: "Museo Fernández Blanco", c: [-34.5919, -58.3776], cat: CAT.PRIV },
+            { n: "Museo de los Niños", c: [-34.6035, -58.4109], cat: CAT.PRIV },
+            { n: "Muntref", c: [-34.5918, -58.3715], cat: CAT.PRIV },
+            { n: "Ciudad Cultural Konex", c: [-34.6062, -58.4111], cat: CAT.PRIV },
+            { n: "CC de la Cooperación", c: [-34.6041, -58.3941], cat: CAT.PRIV },
+            { n: "Club Cultural Matienzo", c: [-34.5934, -58.4468], cat: CAT.PRIV },
+            { n: "Fundación Arthaus", c: [-34.6052, -58.3729], cat: CAT.PRIV },
+            { n: "ArtLab", c: [-34.5865, -58.4431], cat: CAT.PRIV },
+            { n: "Centro Cultural Borges", c: [-34.5996, -58.3749], cat: CAT.PRIV },
+            { n: "Confitería del Molino", c: [-34.6094, -58.3925], cat: CAT.HIST },
+            { n: "Confitería La Ideal", c: [-34.6047, -58.3798], cat: CAT.CAFE },
+            { n: "Café Tortoni", c: [-34.6089, -58.3789], cat: CAT.CAFE },
+            { n: "Catedral Metropolitana", c: [-34.6074, -58.3733], cat: CAT.HIST },
+            { n: "El Ateneo Grand Splendid", c: [-34.5960, -58.3963], cat: CAT.LIB },
+            { n: "Galería Güemes", c: [-34.6075, -58.3752], cat: CAT.LIB },
+            { n: "Galería Pacífico", c: [-34.5997, -58.3753], cat: CAT.LIB },
+            { n: "Palacio de Aguas Corrientes", c: [-34.6015, -58.3957], cat: CAT.HIST },
+            { n: "Cementerio de la Recoleta", c: [-34.5878, -58.3927], cat: CAT.HIST },
+            { n: "Confitería Las Violetas", c: [-34.6152, -58.4239], cat: CAT.CAFE },
+            { n: "Bar El Federal", c: [-34.6186, -58.3740], cat: CAT.CAFE },
+            { n: "Café de los Angelitos", c: [-34.6136, -58.3954], cat: CAT.CAFE },
+            { n: "Farmacia La Estrella", c: [-34.6105, -58.3732], cat: CAT.HIST },
+            { n: "Manzana de las Luces", c: [-34.6110, -58.3750], cat: CAT.HIST },
+            { n: "Teatro Gran Rex", c: [-34.6032, -58.3801], cat: CAT.LIB },
+            { n: "Teatro Ópera", c: [-34.6033, -58.3802], cat: CAT.LIB }
+        ];
+
+        espacios.forEach(lugar => {
+            const marker = L.marker(lugar.c, { icon: lugar.cat.i }).addTo(map);
+            marker.bindPopup(`
+                <div style="text-align:center;">
+                    <b style="font-size:14px;">${lugar.n}</b><br>
+                    <button class="btn-accion" style="margin-top:10px;" onclick="abrirGaleria('${lugar.n.replace(/'/g, "\\'")}', '${lugar.cat.t}', '${lugar.cat.c}')">📸 Ver Galería</button>
+                </div>
+            `);
+        });
+
+        let lugarActual = "";
+
+        async function abrirGaleria(nombre, tipo, color) {
+            lugarActual = nombre; // Captura el nombre exacto del marcador
+            document.getElementById('modalTitulo').innerText = nombre;
+            const tag = document.getElementById('modalTag');
+            tag.innerText = tipo; tag.style.background = color;
+            document.getElementById('miModal').style.display = "block";
+            cargarFotos();
+        }
+
+        async function cargarFotos() {
+            const grid = document.getElementById('galeriaFotos');
+            grid.innerHTML = "Cargando galería...";
+            try {
+                // CORRECCIÓN: Usamos 'ilike' para que no falle por mayúsculas/minúsculas
+                const { data, error } = await supabaseClient
+                    .from('fotos')
+                    .select('*')
+                    .eq('aprobado', true) 
+                    .ilike('lugar', lugarActual.trim()) 
+                    .order('created_at', { ascending: false });
+
+                if (error) { grid.innerHTML = "Error al conectar."; return; }
+                
+                if (!data || data.length === 0) {
+                    grid.innerHTML = "No hay fotos aprobadas aún. ¡Sé el primero!";
+                    return;
+                }
+
+                grid.innerHTML = ""; 
+                data.forEach(f => {
+                    grid.innerHTML += `
+                        <div class="foto-card" data-fancybox="galeria-${lugarActual}" data-src="${f.url}" data-caption="Aportado por: ${f.instagram || f.autor}">
+                            <img src="${f.url}">
+                            <div class="foto-info">Por: <b>${f.instagram || f.autor}</b></div>
+                        </div>`;
+                });
+
+                Fancybox.bind(`[data-fancybox="galeria-${lugarActual}"]`, {
+                    infinite: true,
+                    transitionEffect: "fade"
+                });
+
+            } catch (err) { grid.innerHTML = "Error crítico."; }
+        }
+
+        async function subirFotoReal() {
+            const file = document.getElementById('inputFoto').files[0];
+            const autor = document.getElementById('userName').value || "Anónimo";
+            const insta = document.getElementById('userInsta').value || "";
+            if(!file) return;
+
+            const btn = document.getElementById('btnSubir');
+            btn.innerText = "Subiendo archivo...";
+            btn.disabled = true;
+
+            const fileName = `${Date.now()}_${file.name.replace(/\s/g, '_')}`;
+            
+            // 1. Subir al Storage
+            const { data: upData, error: upError } = await supabaseClient.storage.from('galeria').upload(fileName, file);
+            
+            if(upError) { 
+                alert("Error al subir: " + upError.message); 
+                btn.innerText = "Seleccionar y Publicar Foto";
+                btn.disabled = false;
+                return; 
+            }
+
+            const { data: urlData } = supabaseClient.storage.from('galeria').getPublicUrl(fileName);
+            
+            // 2. INSERTAR CON FILTRO DE SEGURIDAD
+            // CORRECCIÓN: Aseguramos que el nombre del lugar sea el actual del marcador
+            const { error: dbError } = await supabaseClient.from('fotos').insert([{ 
+                lugar: lugarActual.trim(), 
+                url: urlData.publicUrl, 
+                autor, 
+                instagram: insta,
+                aprobado: false 
+            }]);
+            
+            if(dbError) { 
+                alert("Error en base de datos: " + dbError.message); 
+            } else { 
+                alert("¡Gracias! Tu foto ha sido enviada. Aparecerá en el mapa tras ser moderada."); 
+                cerrarModal(); // Cerramos para evitar confusiones
+            }
+            
+            btn.innerText = "Seleccionar y Publicar Foto";
+            btn.disabled = false;
+            document.getElementById('inputFoto').value = ""; 
+        }
+
+        function cerrarModal() { 
+            document.getElementById('miModal').style.display = "none"; 
+        }
+    </script>
+</body>
+</html>
